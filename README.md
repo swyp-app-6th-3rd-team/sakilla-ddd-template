@@ -228,7 +228,7 @@ docker run --rm -v sakila-log:/logs alpine tail -50 /logs/error/error.log
 | `LOG_TOTAL_SIZE_CAP` | 3GB | 전체 상한 |
 
 **bind mount 로 바꾸려면** — 호스트 경로가 직관적이라 `sudo` 없이 볼 수 있다.
-`docker-compose.yml` 의 볼륨 항목을 `- ./logs:/app/logs` 로 바꾸고,
+`docker-compose-dev.yml` 의 볼륨 항목을 `- ./logs:/app/logs` 로 바꾸고,
 호스트 디렉터리 소유권을 컨테이너의 `app` UID 에 맞춘다.
 UID 가 어긋나면 권한 오류가 나므로 named volume 을 기본으로 뒀다.
 
