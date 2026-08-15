@@ -1,0 +1,121 @@
+package com.example.sakila.auth.config;
+
+import com.example.sakila.auth.oauth.CustomOAuth2UserService;
+import com.example.sakila.auth.oauth.HttpCookieOAuth2AuthorizationRequestRepository;
+import com.example.sakila.auth.oauth.OAuth2FailureHandler;
+import com.example.sakila.auth.oauth.OAuth2SuccessHandler;
+import com.example.sakila.auth.security.JwtAuthenticationFilter;
+import com.example.sakila.auth.security.RestAccessDeniedHandler;
+import com.example.sakila.auth.security.RestAuthenticationEntryPoint;
+import lombok.RequiredArgsConstructor;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * Spring Security 설정.
+ *
+ * <p><b>Spring Security 7 대응</b> — {@code MvcRequestMatcher}/{@code AntPathRequestMatcher} 와
+ * {@code HandlerMappingIntrospector} 가 제거되어 {@link PathPatternRequestMatcher} 를 쓴다.
+ * Security 6.x 의 matcher 헬퍼를 그대로 가져오면 컴파일되지 않는다.
+ */
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+@RequiredArgsConstructor
+@EnableConfigurationProperties(AuthProperties.class)
+public class SecurityConfig {
+
+    private static final String[] PUBLIC_GET = {
+            "/", "/error", "/favicon.ico",
+            "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**", "/scalar/**", "/scalar",
+            "/actuator/health/**",
+            "/api/films/**", "/api/actors/**"
+    };
+
+    private final CustomOAuth2UserService oAuth2UserService;
+    private final OAuth2SuccessHandler successHandler;
+    private final OAuth2FailureHandler failureHandler;
+    private final HttpCookieOAuth2AuthorizationRequestRepository authorizationRequestRepository;
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final RestAuthenticationEntryPoint authenticationEntryPoint;
+    private final RestAccessDeniedHandler accessDeniedHandler;
+    private final AuthProperties properties;
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        PathPatternRequestMatcher.Builder mvc = PathPatternRequestMatcher.withDefaults();
+
+        return http
+                .csrf(csrf -> csrf.disable())          // 토큰 기반이라 세션 CSRF 가 없다
+                .httpBasic(basic -> basic.disable())   // 켜두면 401 에 브라우저 팝업이 뜬다
+                .formLogin(form -> form.disable())
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(mvc.matcher(HttpMethod.GET, "/")).permitAll()
+                        .requestMatchers(toMatchers(mvc, PUBLIC_GET)).permitAll()
+                        .requestMatchers(mvc.matcher("/oauth2/**"), mvc.matcher("/login/oauth2/**")).permitAll()
+                        .requestMatchers(mvc.matcher("/api/auth/refresh"), mvc.matcher("/api/auth/logout")).permitAll()
+                        .anyRequest().authenticated())
+
+                .oauth2Login(oauth -> oauth
+                        .authorizationEndpoint(endpoint ->
+                                endpoint.authorizationRequestRepository(authorizationRequestRepository))
+                        .userInfoEndpoint(endpoint -> endpoint.userService(oAuth2UserService))
+                        .successHandler(successHandler)
+                        .failureHandler(failureHandler))
+
+                .exceptionHandling(handling -> handling
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler))
+
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                .build();
+    }
+
+    private RequestMatcher[] toMatchers(PathPatternRequestMatcher.Builder mvc, String[] patterns) {
+        return Arrays.stream(patterns)
+                .map(mvc::matcher)
+                .toArray(RequestMatcher[]::new);
+    }
+
+    /**
+     * CORS.
+     *
+     * <p>{@code allowedOriginPatterns("*")} 에 {@code allowCredentials(true)} 를 함께 켜면
+     * 쿠키를 아무 출처에나 실어 보낼 수 있게 되므로 위험하다.
+     * 여기서는 설정으로 받은 출처만 허용한다.
+     */
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOrigins(properties.cors().allowedOrigins());
+        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Request-Id"));
+        configuration.setExposedHeaders(List.of("X-Request-Id"));
+        configuration.setAllowCredentials(true);   // 리프레시 토큰 쿠키 때문에 필요하다
+        configuration.setMaxAge(3600L);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration);
+        return source;
+    }
+}
