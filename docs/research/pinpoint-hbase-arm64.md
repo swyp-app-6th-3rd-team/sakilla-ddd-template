@@ -188,13 +188,23 @@ Waiting on regionserver count=1; waited=119221ms,
    작성해둔 독립 스택 + external network 구조가 그대로 재사용된다
 3. **OpenTelemetry 스택으로 전환** — [otel-vs-pinpoint.md](otel-vs-pinpoint.md) 참조
 
-## 산출물
+## 산출물 — git 히스토리에 보존
 
-실패했지만 아래는 남아 있고, 위 함정 1·2·3·5·6 을 모두 반영했다.
-x86 환경에서 Pinpoint 를 띄운다면 그대로 쓸 수 있다.
+작업물은 워킹 트리에서 제거했지만 **커밋 `4ee634a` 에 그대로 남아 있다.**
+위 함정 1·2·3·5·6 을 모두 반영한 상태이므로, **x86 환경에서 Pinpoint 를 띄운다면
+그대로 되살려 쓸 수 있다.**
 
-- [`pinpoint/docker-compose.yml`](../../pinpoint/docker-compose.yml) — 독립 백엔드 스택
-- [`pinpoint/hbase-init.sh`](../../pinpoint/hbase-init.sh) — DDL 프로브 기반 초기화 래퍼
+```sh
+git show 4ee634a --stat                      # 무엇이 있었는지
+git checkout 4ee634a -- pinpoint/ docker-compose-pinpoint.yml   # 되살리기
+```
+
+- `pinpoint/docker-compose.yml` — 독립 백엔드 스택(6 컨테이너)
+- `pinpoint/hbase-init.sh` — DDL 프로브 기반 초기화 래퍼
+- `docker-compose-pinpoint.yml` — 에이전트 부착 override
+
+템플릿 오염을 피하려고 워킹 트리에서는 뺐다. arm64 에서 뜨지 않는 스택을
+기본 산출물로 두면 이 템플릿을 쓰는 사람이 혼란스럽다.
 
 ## 출처
 

@@ -15,27 +15,23 @@ RUN chmod +x gradlew && ./gradlew dependencies --no-daemon || true
 COPY src ./src
 RUN ./gradlew bootJar --no-daemon -x test
 
-# Pinpoint 에이전트 스테이지 (옵트인)
+# OpenTelemetry 에이전트 스테이지 (옵트인)
 #
-# PINPOINT_ENABLED=false 가 기본이라 평소에는 이 스테이지가 빈 디렉터리만 만든다.
-# 에이전트를 안 쓰는 프로젝트에는 흔적이 거의 없다.
-#   docker build --build-arg PINPOINT_ENABLED=true .
+# OTEL_ENABLED=false 가 기본이라 평소에는 빈 디렉터리만 만든다.
+# 에이전트를 안 쓰면 이미지에 흔적이 거의 없다.
+#   docker build --build-arg OTEL_ENABLED=true .
 #
-# 에이전트와 collector 는 반드시 같은 3.1.x 여야 한다 — 3.1.0 부터 span 전송
-# 기본값이 BATCH 로 바뀌었고 이는 3.1.0+ collector 를 요구한다.
-# 또한 Java 25 를 지원하는 에이전트는 3.1.x 가 처음이다(3.0.x 는 21 까지).
-FROM alpine:3.20 AS pinpoint
-ARG PINPOINT_ENABLED=false
-ARG PINPOINT_VERSION=3.1.0
+# 에이전트는 아키텍처 독립적인 단일 jar 다(순수 Java). 백엔드 이미지와 달리
+# arm64/amd64 를 가리지 않는다.
+FROM alpine:3.20 AS otel
+ARG OTEL_ENABLED=false
+ARG OTEL_AGENT_VERSION=2.30.0
 WORKDIR /stage
-RUN mkdir -p /stage/pinpoint-agent && \
-    if [ "$PINPOINT_ENABLED" = "true" ]; then \
-      apk add --no-cache curl tar && \
-      curl -fsSL -o /tmp/agent.tar.gz \
-        "https://github.com/pinpoint-apm/pinpoint/releases/download/v${PINPOINT_VERSION}/pinpoint-agent-${PINPOINT_VERSION}.tar.gz" && \
-      tar xzf /tmp/agent.tar.gz -C /tmp && \
-      cp -r "/tmp/pinpoint-agent-${PINPOINT_VERSION}/." /stage/pinpoint-agent/ && \
-      rm -rf /tmp/agent.tar.gz "/tmp/pinpoint-agent-${PINPOINT_VERSION}"; \
+RUN mkdir -p /stage/otel && \
+    if [ "$OTEL_ENABLED" = "true" ]; then \
+      apk add --no-cache curl && \
+      curl -fsSL -o /stage/otel/opentelemetry-javaagent.jar \
+        "https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v${OTEL_AGENT_VERSION}/opentelemetry-javaagent.jar"; \
     fi
 
 # 실행 스테이지
@@ -57,13 +53,13 @@ RUN addgroup -S app && adduser -S app -G app
 #   → java.io.FileNotFoundException: /app/logs/error/error.log (Permission denied)
 #
 # USER 를 바꾸기 전에 만들어야 chown 이 먹는다.
-RUN mkdir -p /app/logs/error /app/logs/warn /app/logs/info && \
+# jfr/ 은 JFR 상시 녹화의 링버퍼가 쌓이는 곳이다(아래 ENTRYPOINT 참조).
+RUN mkdir -p /app/logs/error /app/logs/warn /app/logs/info /app/logs/jfr && \
     chown -R app:app /app/logs
 
-# Pinpoint 에이전트를 이미지에 넣는다.
-# PINPOINT_ENABLED=false 면 빈 디렉터리만 복사되므로 사실상 무해하다.
-# 에이전트는 로그를 자기 디렉터리 아래에 쓰므로 소유권을 app 에 넘긴다.
-COPY --from=pinpoint --chown=app:app /stage/pinpoint-agent /pinpoint-agent
+# OTel 에이전트를 이미지에 넣는다.
+# OTEL_ENABLED=false 면 빈 디렉터리만 복사되므로 사실상 무해하다.
+COPY --from=otel --chown=app:app /stage/otel /otel
 
 USER app
 
@@ -75,8 +71,24 @@ ENV LOG_DIR=/app/logs
 EXPOSE 8080
 
 # 컨테이너 메모리 한도를 JVM 이 인식하게 한다.
+#
+# JFR 상시 녹화를 켠다. 이건 OTel 과 독립적이며 에이전트 없이도 동작한다.
+#   disk=true + maxage=6h  → 디스크에 6시간 롤링 링버퍼를 유지한다.
+#     "어젯밤 3시에 멈췄는데 그때 스레드가 뭘 했나" 를 사후에 답할 수 있다.
+#     사람이 그 시점에 붙어 있을 필요가 없다.
+#   settings=profile       → JDK 가 "통상 2% 내외 오버헤드" 로 명시한 프로파일.
+#     더 가볍게 하려면 settings=default("상시 사용 안전, 1% 미만").
+#   dumponexit=true        → 컨테이너가 죽을 때 마지막 상태를 남긴다.
+#
+# 담기는 것: jdk.ThreadDump(jstack 형식), jdk.JavaMonitorEnter(락 대기 + previousOwner),
+#           jdk.ThreadPark, jdk.SocketRead 등이 기본 활성이다.
+#
+# 주의: JFR 보존은 chunk 단위라 maxage=6h 가 정확히 6시간을 보장하지는 않는다.
+# 덤프: docker exec <c> jcmd 1 JFR.dump name=app filename=/app/logs/jfr/dump.jfr
 ENTRYPOINT ["java", \
   "-XX:MaxRAMPercentage=75.0", \
   "-XX:+UseContainerSupport", \
+  "-XX:StartFlightRecording=name=app,disk=true,maxage=6h,maxsize=512m,settings=profile,dumponexit=true,filename=/app/logs/jfr/onexit.jfr", \
+  "-XX:FlightRecorderOptions=repository=/app/logs/jfr", \
   "-Duser.timezone=Asia/Seoul", \
   "-jar", "app.jar"]
