@@ -15,6 +15,29 @@ RUN chmod +x gradlew && ./gradlew dependencies --no-daemon || true
 COPY src ./src
 RUN ./gradlew bootJar --no-daemon -x test
 
+# Pinpoint 에이전트 스테이지 (옵트인)
+#
+# PINPOINT_ENABLED=false 가 기본이라 평소에는 이 스테이지가 빈 디렉터리만 만든다.
+# 에이전트를 안 쓰는 프로젝트에는 흔적이 거의 없다.
+#   docker build --build-arg PINPOINT_ENABLED=true .
+#
+# 에이전트와 collector 는 반드시 같은 3.1.x 여야 한다 — 3.1.0 부터 span 전송
+# 기본값이 BATCH 로 바뀌었고 이는 3.1.0+ collector 를 요구한다.
+# 또한 Java 25 를 지원하는 에이전트는 3.1.x 가 처음이다(3.0.x 는 21 까지).
+FROM alpine:3.20 AS pinpoint
+ARG PINPOINT_ENABLED=false
+ARG PINPOINT_VERSION=3.1.0
+WORKDIR /stage
+RUN mkdir -p /stage/pinpoint-agent && \
+    if [ "$PINPOINT_ENABLED" = "true" ]; then \
+      apk add --no-cache curl tar && \
+      curl -fsSL -o /tmp/agent.tar.gz \
+        "https://github.com/pinpoint-apm/pinpoint/releases/download/v${PINPOINT_VERSION}/pinpoint-agent-${PINPOINT_VERSION}.tar.gz" && \
+      tar xzf /tmp/agent.tar.gz -C /tmp && \
+      cp -r "/tmp/pinpoint-agent-${PINPOINT_VERSION}/." /stage/pinpoint-agent/ && \
+      rm -rf /tmp/agent.tar.gz "/tmp/pinpoint-agent-${PINPOINT_VERSION}"; \
+    fi
+
 # 실행 스테이지
 FROM amazoncorretto:25-alpine
 WORKDIR /app
@@ -36,6 +59,11 @@ RUN addgroup -S app && adduser -S app -G app
 # USER 를 바꾸기 전에 만들어야 chown 이 먹는다.
 RUN mkdir -p /app/logs/error /app/logs/warn /app/logs/info && \
     chown -R app:app /app/logs
+
+# Pinpoint 에이전트를 이미지에 넣는다.
+# PINPOINT_ENABLED=false 면 빈 디렉터리만 복사되므로 사실상 무해하다.
+# 에이전트는 로그를 자기 디렉터리 아래에 쓰므로 소유권을 app 에 넘긴다.
+COPY --from=pinpoint --chown=app:app /stage/pinpoint-agent /pinpoint-agent
 
 USER app
 

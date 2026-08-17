@@ -1,0 +1,209 @@
+# Pinpoint APM 백엔드 — 독립 스택
+#
+# 이 스택은 앱과 수명주기를 공유하지 않는다. 한 번 띄우고 계속 둔다.
+#
+#   docker compose -f pinpoint/docker-compose.yml up -d
+#
+# 왜 앱 compose 에 합치지 않는가:
+#   - 앱을 down 하면 HBase 까지 내려가 다른 앱의 트레이스가 끊긴다
+#   - 앱마다 백엔드를 띄우면 8 컨테이너 × N 이 되어 홈서버가 감당하지 못한다
+#   - Pinpoint 의 ServerMap 은 여러 앱을 한 화면에 그리는 게 존재 이유다.
+#     백엔드가 앱마다 분리되면 그 기능이 죽는다
+#
+# 앱은 아래 external 네트워크에 참여해 collector 에 접속한다.
+# 앱 리포지토리의 docker-compose-pinpoint.yml 을 참조.
+#
+# 사전 준비 (최초 1회):
+#   docker network create pinpoint-net
+#
+# 버전 고정: 에이전트와 collector 는 반드시 같은 3.1.x 여야 한다.
+# 3.1.0 부터 span 전송 기본값이 BATCH 로 바뀌었고 이는 3.1.0+ collector 를 요구한다.
+# 또한 Java 25 를 지원하는 에이전트는 3.1.x 가 처음이다(3.0.x 는 21 까지).
+
+x-pinpoint-version: &pinpoint-version "3.1.0"
+
+services:
+  # ── Zookeeper ───────────────────────────────────────────────────────────
+  # HBase 가 요구한다. 제거할 수 없다.
+  #
+  # 공식 compose 는 zoo1/zoo2/zoo3 3노드 앙상블을 띄우지만, 단일 홈서버에서는
+  # 과하다. 1노드로 줄이되 아래 pinpoint-hbase 의 quorum 설정을 함께 덮어써야 한다
+  # (이미지의 hbase-site.xml 에 zoo1,zoo2,zoo3 이 하드코딩돼 있음).
+  zoo1:
+    image: zookeeper:3.4.13
+    container_name: pinpoint-zoo1
+    restart: unless-stopped
+    hostname: zoo1
+    environment:
+      ZOO_MY_ID: 1
+      ZOO_SERVERS: server.1=0.0.0.0:2888:3888
+      # 세션 타임아웃 상한을 올린다.
+      #
+      # ZK 서버는 클라이언트가 요청한 세션 타임아웃을
+      # maxSessionTimeout = 20 × tickTime 으로 잘라낸다. 기본 tickTime=2000 이면
+      # 상한이 40초라, HBase 가 90초를 요청해도 40초로 협상된다.
+      # HBase 초기화(TraceV2 리전 대량 생성) 중 이 40초를 넘기면 세션이 만료되고
+      # master 가 죽어 초기화가 완주하지 못한다.
+      #
+      # 이 이미지는 ZOO_MAX_SESSION_TIMEOUT 을 지원하지 않으므로(entrypoint 가 읽는
+      # 변수 목록에 없다) tickTime 으로 상한을 올린다.
+      #   tickTime 10000 → maxSessionTimeout 200초, HBase 요청 90초가 그대로 통과
+      #
+      # 확인: docker logs <zoo> | grep "negotiated timeout"  → 90000 이어야 한다.
+      #       40000 이 보이면 이 설정이 안 먹은 것이다.
+      ZOO_TICK_TIME: 10000
+    volumes:
+      - zoo_data:/data
+      - zoo_datalog:/datalog
+    networks:
+      - pinpoint-net
+
+  # ── HBase — 트레이스 저장소 ─────────────────────────────────────────────
+  # 최초 기동 시 테이블을 생성한다. 수 분 걸리며, 그동안 collector/web 은
+  # 재시작 루프를 돈다(정상 동작이다).
+  pinpoint-hbase:
+    image: pinpointdocker/pinpoint-hbase:3.1.0
+    container_name: pinpoint-hbase
+    restart: unless-stopped
+    depends_on:
+      - zoo1
+    # 힙과 GC 를 명시한다. 기본값으로 두면 TraceV2 테이블(리전을 다수로 pre-split)
+    # 생성 중 GC 가 수십~수백 초 멈추고, 그 사이 ZK 세션이 만료돼 초기화가
+    # 영구히 멈추거나 master 가 죽는다. 실측 증상:
+    #   "We slept 190542ms instead of 3000ms ... long garbage collecting pause"
+    #   "Client session timed out, have not heard from server in 59546ms"
+    #   "KeeperException while trying to check baseZNode" → "Master exiting"
+    #
+    # 원인은 힙 용량이 아니라 GC 알고리즘이다 — 힙을 4G 로 줘도 실사용은 1GB 인데
+    # 59초 정지가 났다. 이미지 기본 GC 인 CMS 가 이 환경에서 병적으로 느리다.
+    # (힙을 키우면 CMS 가 훑을 공간이 늘어 오히려 악화된다.)
+    #
+    # 진행 중인지 멈춘 건지 구분하려면 로그의 "성격"을 봐야 한다:
+    # LruBlockCache 통계는 5분마다 찍히는 하트비트라 멈춰도 갱신된다.
+    # master 로그 마지막 시각을 `docker exec <c> date`(UTC) 와 비교할 것.
+    environment:
+      - HBASE_HEAPSIZE=${PINPOINT_HBASE_HEAPSIZE:-2G}
+    # 이미지 기본 기동 스크립트를 래퍼로 대체한다.
+    #
+    # 이미지의 check-table.sh 는 master 준비를 확인하지 않고 `sleep 15` 후 곧바로
+    # create 문을 쏜다. master 초기화가 15초를 넘기면 모든 create 가
+    # PleaseHoldException: Master is initializing 으로 튕기고, 테이블이 하나도
+    # 없는 채로 컨테이너만 Up 으로 남는다(가장 헷갈리는 실패 양상).
+    #
+    # 래퍼가 하는 일: quorum·타임아웃·GC 패치 + master 준비 확인 후 테이블 생성.
+    # 자세한 내용은 pinpoint/hbase-init.sh 주석 참조.
+    command: ["/bin/bash", "/hbase-init.sh"]
+    volumes:
+      - ./hbase-init.sh:/hbase-init.sh:ro
+      - hbase_data:/home/pinpoint/hbase
+      - /home/pinpoint/zookeeper
+    networks:
+      - pinpoint-net
+
+  # ── Redis — collector/web 이 참조 ───────────────────────────────────────
+  pinpoint-redis:
+    image: redis:7-alpine
+    container_name: pinpoint-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - pinpoint-net
+
+  # ── MySQL — web 의 사용자·알람 메타데이터용 ────────────────────────────
+  # 트레이스 데이터와 무관하다(그건 HBase 에 있다).
+  pinpoint-mysql:
+    image: mysql:8.0
+    container_name: pinpoint-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${PINPOINT_MYSQL_ROOT_PASSWORD:-pinpoint-root}
+      MYSQL_DATABASE: pinpoint
+      MYSQL_USER: ${PINPOINT_MYSQL_USER:-admin}
+      MYSQL_PASSWORD: ${PINPOINT_MYSQL_PASSWORD:-admin}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - pinpoint-net
+
+  # ── Collector — 에이전트가 데이터를 보내는 곳 ──────────────────────────
+  pinpoint-collector:
+    image: pinpointdocker/pinpoint-collector:3.1.0
+    container_name: pinpoint-collector
+    restart: unless-stopped
+    depends_on:
+      - pinpoint-hbase
+      - zoo1
+      - pinpoint-redis
+    # 앱이 같은 네트워크에 있으면 서비스명으로 접근하므로 포트 노출이 필수는 아니다.
+    # 호스트에서 직접 실행하는 앱(IDE 기동 등)을 위해 열어둔다.
+    ports:
+      - "${PINPOINT_COLLECTOR_AGENT_PORT:-9991}:9991/tcp"
+      - "${PINPOINT_COLLECTOR_STAT_PORT:-9992}:9992/tcp"
+      - "${PINPOINT_COLLECTOR_SPAN_PORT:-9993}:9993/tcp"
+    environment:
+      - SPRING_PROFILES_ACTIVE=release
+      - PINPOINT_ZOOKEEPER_ADDRESS=zoo1
+      - CLUSTER_ENABLE=true
+      - LOGGING_LEVEL_ROOT=INFO
+      - FLINK_CLUSTER_ENABLE=false
+      - SPRING_DATA_REDIS_HOST=pinpoint-redis
+      - SPRING_DATA_REDIS_PORT=6379
+    networks:
+      - pinpoint-net
+
+  # ── Web — UI ────────────────────────────────────────────────────────────
+  pinpoint-web:
+    image: pinpointdocker/pinpoint-web:3.1.0
+    container_name: pinpoint-web
+    restart: unless-stopped
+    depends_on:
+      - pinpoint-hbase
+      - pinpoint-mysql
+      - zoo1
+      - pinpoint-redis
+    ports:
+      # 앱이 8080 을 쓰는 경우가 많으므로 기본값을 8090 으로 둔다.
+      - "${PINPOINT_WEB_PORT:-8090}:8080"
+    environment:
+      - WEB_SERVER_PORT=8080
+      - SPRING_PROFILES_ACTIVE=release
+      - PINPOINT_ZOOKEEPER_ADDRESS=zoo1
+      - CLUSTER_ENABLE=true
+      - ADMIN_PASSWORD=${PINPOINT_ADMIN_PASSWORD:-admin}
+      - CONFIG_SENDUSAGE=false
+      - LOGGING_LEVEL_ROOT=INFO
+      - CONFIG_SHOW_APPLICATIONSTAT=true
+      - JDBC_DRIVERCLASSNAME=com.mysql.jdbc.Driver
+      - JDBC_URL=jdbc:mysql://pinpoint-mysql:3306/pinpoint?characterEncoding=UTF-8
+      - JDBC_USERNAME=${PINPOINT_MYSQL_USER:-admin}
+      - JDBC_PASSWORD=${PINPOINT_MYSQL_PASSWORD:-admin}
+      - SPRING_DATASOURCE_HIKARI_JDBCURL=jdbc:mysql://pinpoint-mysql:3306/pinpoint?characterEncoding=UTF-8
+      - SPRING_DATASOURCE_HIKARI_USERNAME=${PINPOINT_MYSQL_USER:-admin}
+      - SPRING_DATASOURCE_HIKARI_PASSWORD=${PINPOINT_MYSQL_PASSWORD:-admin}
+      - SPRING_METADATASOURCE_HIKARI_JDBCURL=jdbc:mysql://pinpoint-mysql:3306/pinpoint?characterEncoding=UTF-8
+      - SPRING_METADATASOURCE_HIKARI_USERNAME=${PINPOINT_MYSQL_USER:-admin}
+      - SPRING_METADATASOURCE_HIKARI_PASSWORD=${PINPOINT_MYSQL_PASSWORD:-admin}
+      - SPRING_DATA_REDIS_HOST=pinpoint-redis
+      - SPRING_DATA_REDIS_PORT=6379
+    networks:
+      - pinpoint-net
+
+volumes:
+  hbase_data:
+    name: pinpoint-hbase-data
+  mysql_data:
+    name: pinpoint-mysql-data
+  redis_data:
+    name: pinpoint-redis-data
+  zoo_data:
+    name: pinpoint-zoo-data
+  zoo_datalog:
+    name: pinpoint-zoo-datalog
+
+networks:
+  # external — 앱 스택이 같은 네트워크에 참여해 collector 에 접속한다.
+  # 최초 1회: docker network create pinpoint-net
+  pinpoint-net:
+    external: true
+    name: pinpoint-net

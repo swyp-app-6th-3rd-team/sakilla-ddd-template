@@ -17,11 +17,18 @@ cp .env.example .env
 openssl rand -base64 48
 
 # 2. DB 기동 (앱은 IDE 에서 실행하는 게 기본)
-docker compose up -d
-docker compose ps          # healthy 가 될 때까지 대기
+docker compose -f docker-compose-dev.yml up -d
+docker compose -f docker-compose-dev.yml ps    # healthy 가 될 때까지 대기
 
 # 3. 애플리케이션
 SPRING_PROFILES_ACTIVE=local ./gradlew bootRun
+```
+
+compose 파일이 환경별로 나뉘어 있어 `-f` 가 필요하다(`docker-compose-dev.yml` ·
+`docker-compose-prod.yml`). 매번 붙이기 번거로우면 `.env` 에 다음을 넣으면 된다.
+
+```bash
+COMPOSE_FILE=docker-compose-dev.yml
 ```
 
 `local` 프로파일은 Sakila 시드 데이터(9MB, 46,273 INSERT)를 로드한다.
@@ -30,7 +37,7 @@ SPRING_PROFILES_ACTIVE=local ./gradlew bootRun
 앱과 DB 를 함께 컨테이너로 띄우려면:
 
 ```bash
-docker compose --profile app up -d
+docker compose -f docker-compose-dev.yml --profile app up -d
 ```
 
 ### 확인
@@ -261,6 +268,7 @@ CI · PR 템플릿 · ArchUnit 골격
 | [docs/adr/](docs/adr/) | 되돌리기 비싼 결정 9건과 기각한 대안 |
 | [docs/prd/](docs/prd/) | 무엇을 왜 만들었나 + 완료 판정과 검증 결과 |
 | [docs/requirement/](docs/requirement/) | 원문 요청과 해석 |
+| [docs/research/](docs/research/) | 결정 **전** 조사 기록 (실측 / 문서 / 추정 구분) |
 
 특히 볼 만한 것:
 
