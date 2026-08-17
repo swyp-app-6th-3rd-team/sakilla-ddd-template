@@ -21,6 +21,9 @@
 | springdoc | 3.1.0 | 2.x 는 Boot 4 비호환 |
 | Testcontainers | 1.21.3 | `testcontainers-bom` 으로 버전 관리 |
 | ArchUnit | 1.4.1 | |
+| OpenTelemetry Java Agent | 2.30.0 | 옵트인. 아키텍처 독립적 단일 jar |
+| Micrometer Prometheus Registry | Boot 4.1 관리 | `/actuator/prometheus` (관리 포트) |
+| Grafana / Tempo / Prometheus / Loki | 12.3.1 / 2.9.0 / v3.7.3 / 3.5.7 | 독립 스택. 전부 arm64 네이티브 |
 
 ---
 

@@ -17,11 +17,18 @@ cp .env.example .env
 openssl rand -base64 48
 
 # 2. DB 기동 (앱은 IDE 에서 실행하는 게 기본)
-docker compose up -d
-docker compose ps          # healthy 가 될 때까지 대기
+docker compose -f docker-compose-dev.yml up -d
+docker compose -f docker-compose-dev.yml ps    # healthy 가 될 때까지 대기
 
 # 3. 애플리케이션
 SPRING_PROFILES_ACTIVE=local ./gradlew bootRun
+```
+
+compose 파일이 환경별로 나뉘어 있어 `-f` 가 필요하다(`docker-compose-dev.yml` ·
+`docker-compose-prod.yml`). 매번 붙이기 번거로우면 `.env` 에 다음을 넣으면 된다.
+
+```bash
+COMPOSE_FILE=docker-compose-dev.yml
 ```
 
 `local` 프로파일은 Sakila 시드 데이터(9MB, 46,273 INSERT)를 로드한다.
@@ -30,7 +37,7 @@ SPRING_PROFILES_ACTIVE=local ./gradlew bootRun
 앱과 DB 를 함께 컨테이너로 띄우려면:
 
 ```bash
-docker compose --profile app up -d
+docker compose -f docker-compose-dev.yml --profile app up -d
 ```
 
 ### 확인
@@ -40,6 +47,8 @@ docker compose --profile app up -d
 | http://localhost:8080/scalar | API 문서 (Scalar) |
 | http://localhost:8080/swagger-ui.html | API 문서 (Swagger UI) |
 | http://localhost:8080/actuator/health | 헬스체크 |
+| http://localhost:9090/actuator/prometheus | 메트릭 (관리 포트 — 서비스 포트에서는 401) |
+| http://localhost:3000 | Grafana ([관측성](#관측성) 을 띄운 경우) |
 
 ---
 
@@ -147,14 +156,14 @@ ArchUnit 규칙이 이를 강제한다.
 ## 테스트
 
 ```bash
-./gradlew test          # 전체 108건
+./gradlew test          # 전체 113건
 ```
 
 | 계층 | 건수 | Docker |
 |---|---|---|
-| 도메인·어댑터·서비스 단위 | 60 | 불필요 |
+| 도메인·어댑터·서비스 단위 | 56 | 불필요 |
 | 아키텍처 (ArchUnit) | 18 | 불필요 |
-| 통합 (TestContainers MySQL) | 38 | 필요 |
+| 통합 (TestContainers MySQL) | 39 | 필요 |
 
 컨테이너 재사용을 켜면 통합 테스트가 빨라진다:
 
@@ -169,6 +178,65 @@ echo "testcontainers.reuse.enable=true" >> ~/.testcontainers.properties
 **규칙을 추가할 때는 일부러 위반하는 코드를 넣어 그 규칙만 실패하는지 확인한 뒤 커밋한다.**
 통과만으로는 규칙이 무언가를 지킨다는 증거가 되지 않는다 —
 실제로 이 검증 과정에서 규칙 하나의 오검출 버그를 찾았다([PRD-004](docs/prd/PRD-004-테스트.md)).
+
+---
+
+## 관측성
+
+**기본은 꺼져 있다.** 아무 설정 없이 실행하면 변경 전과 동일하게 동작한다.
+
+트레이스(Tempo) · 메트릭(Prometheus) · 로그(Loki)를 Grafana 한 곳에서 본다.
+백엔드는 **여러 앱이 공유하는 독립 스택**이라 앱과 수명주기가 분리돼 있다 —
+앱을 내려도 다른 앱의 트레이스가 끊기지 않는다.
+
+```bash
+# 1. 백엔드 (최초 1회, 이후 계속 떠 있음)
+docker network create observability-net
+docker compose -f observability/docker-compose.yml up -d
+
+# 2. 앱에 에이전트 부착 (--build 를 빠뜨리지 말 것)
+docker compose -f docker-compose-prod.yml -f docker-compose-otel.yml --profile app up -d --build
+```
+
+Grafana 는 http://localhost:3000 (datasource·대시보드가 자동 등록된다).
+기본 계정은 `.env` 의 `GRAFANA_USER`/`GRAFANA_PASSWORD` 다.
+
+> **홈서버에 배포한다면** [배포 매뉴얼](docs/observability-deployment.md) 을 먼저 읽는다.
+> 자원 산정 · 보존 기간 · 인증 하드닝 · 앱 추가 · 백업/복구 · 장애 대응이 들어 있다.
+> 특히 **기본 비밀번호와 보존 기간은 배포 전에 반드시 바꾼다.**
+
+### 무엇을 볼 수 있나
+
+| 화면 | 답하는 질문 |
+|---|---|
+| Tempo 트레이스 | "이 요청의 800ms 중 DB 가 얼마인가" — 구간별 분해 |
+| Tempo service graph | 서비스 간 호출 토폴로지 (Pinpoint ServerMap 대체) |
+| `진행 중 요청` 대시보드 | "지금 무엇이 오래 걸리고 있나" — 1s/3s/5s 버킷 |
+| Hikari 패널 | "풀 크기 10 이 적정한가" — active/idle/pending 시계열 |
+| Loki | trace_id 로 그 요청의 로그를 바로 조회 |
+
+로그 한 줄에 `correlationId` 와 `trace_id` 가 함께 찍히므로 두 세계가 연결된다.
+
+### 앱이 멈췄을 때 — JFR
+
+JFR 상시 녹화가 **6시간 롤링 링버퍼**로 돌고 있다(오버헤드 약 2%).
+사람이 그 시점에 붙어 있지 않아도 사후에 조회할 수 있다.
+
+```bash
+docker exec <container> jcmd 1 JFR.dump name=app filename=/app/logs/jfr/dump.jfr
+# JDK Mission Control 이나 `jfr summary` 로 연다
+```
+
+`jdk.ThreadDump`(jstack 형식) · `jdk.JavaMonitorEnter`(락 대기 + 이전 소유자) ·
+`jdk.ThreadPark` 등이 담긴다.
+
+### 끄고 싶으면
+
+`docker-compose-otel.yml` 을 빼면 된다. 앱 이미지에서도 제거하려면
+`--build-arg OTEL_ENABLED=false`(기본값)로 빌드한다.
+
+근거와 측정값: [ADR-0010](docs/adr/0010-observability-opentelemetry.md) ·
+[docs/research/](docs/research/)
 
 ---
 
@@ -188,8 +256,11 @@ logs/info/info.log       INFO 이상 전부   ← 전체 흐름 추적
 없으면 UUID 가 생성되어 응답 헤더로 돌아온다. 한 요청의 로그를 흩어진 줄들 사이에서
 다시 모을 때 쓴다.
 
+관측성을 켜면 `trace_id`·`span_id` 가 함께 찍혀 Grafana 의 트레이스와 이어진다
+(에이전트가 없으면 하이픈으로 표시된다).
+
 ```
-2026-08-15 12:22:20.247 WARN  [a3f2c1e0-...] [http-nio-8080-exec-3] c.e.s.e.GlobalExceptionHandler - ...
+2026-08-15 12:22:20.247 WARN  [a3f2c1e0-...] [76f7ba13...] [6055ebab...] [http-nio-8080-exec-3] c.e.s.e.GlobalExceptionHandler - ...
 ```
 
 ### 로그 확인
@@ -247,9 +318,15 @@ UID 가 어긋나면 권한 오류가 나므로 named volume 을 기본으로 �
 5. **`ResponseCode`** — `RENTAL_*` 항목을 자기 도메인 코드로 교체
 6. **`ArchitectureTest`** — `RENTAL_DOMAIN` 상수와 "템플릿 경계" 규칙을 자기 패키지에 맞게 수정
 7. **`docs/`** — ADR·PRD 는 이 템플릿의 결정 기록이다. 참고만 하고 새로 쓴다
+8. **`src/test/java/com/example/sakila/observability/`** — N+1 검증 테스트는
+   `sakila` 예제 엔티티에 의존한다. 1번을 지우면 함께 지운다
 
 **남길 것**: `common/` · `config/` · `error/` · `auth/` · 빌드 설정 · docker-compose ·
-CI · PR 템플릿 · ArchUnit 골격
+CI · PR 템플릿 · ArchUnit 골격 · **`observability/`**(관측성 스택은 도메인 무관)
+
+관측성을 안 쓸 거라면 `observability/` · `docker-compose-otel.yml` 을 지우고
+`Dockerfile` 의 `otel` 스테이지와 `COPY --from=otel` 한 줄을 제거한다.
+JFR 은 JDK 내장이라 ENTRYPOINT 의 `-XX:StartFlightRecording` 만 빼면 된다.
 
 ---
 
@@ -261,6 +338,8 @@ CI · PR 템플릿 · ArchUnit 골격
 | [docs/adr/](docs/adr/) | 되돌리기 비싼 결정 9건과 기각한 대안 |
 | [docs/prd/](docs/prd/) | 무엇을 왜 만들었나 + 완료 판정과 검증 결과 |
 | [docs/requirement/](docs/requirement/) | 원문 요청과 해석 |
+| [docs/research/](docs/research/) | 결정 **전** 조사 기록 (실측 / 문서 / 추정 구분) |
+| [docs/observability-deployment.md](docs/observability-deployment.md) | 관측성 스택 홈서버 배포·운영 매뉴얼 |
 
 특히 볼 만한 것:
 
