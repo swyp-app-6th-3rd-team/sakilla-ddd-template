@@ -142,6 +142,29 @@ Pinpoint 의 스레드 덤프는 요청이 살아 있을 때만 동작하므로,
 
 ---
 
+## 5-1. 에이전트 jar 부재 시 방어 (실사용 함정)
+
+**증상**: OTel 없이 한 번 띄운 뒤 `docker-compose-otel.yml` 을 얹으면 앱이 crash-loop 한다.
+
+```
+Error opening zip file or JAR manifest missing : /otel/opentelemetry-javaagent.jar
+agent library failed Agent_OnLoad: instrument
+```
+
+**원인**: `docker compose` 는 이미지가 이미 있으면 **build arg 가 바뀌어도 재빌드하지 않는다.**
+`-javaagent` 는 주입되는데 이미지 안에 jar 이 없는 상태가 된다.
+관측성을 켜려다 서비스를 내리는 셈이라 옵트인 설계의 취지에 반한다.
+
+**해결**: 진입점 스크립트(`docker-entrypoint.sh`)가 jar 존재를 확인하고,
+없으면 `-javaagent` 만 떼어낸 뒤 해결 방법을 경고로 알린다.
+
+**검증**
+
+| 상황 | 결과 |
+|---|---|
+| stale 이미지 + override | 경고 3줄 출력 후 **4.25초 정상 기동** (이전에는 crash-loop) |
+| `--build` 로 재빌드 후 | 경고 0줄, 에이전트 2.30.0 부착, 5.08초 기동 |
+
 ## 6. 파이프라인 도달 확인
 
 | 신호 | 확인 |

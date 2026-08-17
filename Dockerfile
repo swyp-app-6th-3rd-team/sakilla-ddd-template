@@ -61,6 +61,11 @@ RUN mkdir -p /app/logs/error /app/logs/warn /app/logs/info /app/logs/jfr && \
 # OTEL_ENABLED=false 면 빈 디렉터리만 복사되므로 사실상 무해하다.
 COPY --from=otel --chown=app:app /stage/otel /otel
 
+# 진입점 스크립트. 에이전트 jar 이 없는데 -javaagent 가 지정된 경우를 방어한다
+# (compose 가 stale 이미지를 재사용할 때 발생한다 — 스크립트 주석 참조).
+COPY --chown=app:app docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 USER app
 
 COPY --from=builder --chown=app:app /workspace/build/libs/*.jar app.jar
@@ -85,7 +90,7 @@ EXPOSE 8080
 #
 # 주의: JFR 보존은 chunk 단위라 maxage=6h 가 정확히 6시간을 보장하지는 않는다.
 # 덤프: docker exec <c> jcmd 1 JFR.dump name=app filename=/app/logs/jfr/dump.jfr
-ENTRYPOINT ["java", \
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh", "java", \
   "-XX:MaxRAMPercentage=75.0", \
   "-XX:+UseContainerSupport", \
   "-XX:StartFlightRecording=name=app,disk=true,maxage=6h,maxsize=512m,settings=profile,dumponexit=true,filename=/app/logs/jfr/onexit.jfr", \
