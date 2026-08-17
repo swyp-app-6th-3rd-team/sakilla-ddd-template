@@ -29,11 +29,22 @@
       이게 있어야 한 요청의 로그를 흩어진 줄들 사이에서 다시 모을 수 있다.
       값이 없는 로그(기동 로그 등)는 하이픈으로 표시된다.
     -->
+    <!--
+      trace_id / span_id 는 OTel 에이전트가 MDC 에 넣는다(logback-mdc 계측).
+      에이전트 없이 실행하면 값이 없으므로 하이픈으로 표시된다 — 즉 이 패턴은
+      에이전트 유무와 무관하게 안전하다.
+
+      두 추적 ID 가 공존하는 이유:
+        correlationId — 이 앱이 만든다(X-Request-Id). 클라이언트가 지정할 수 있다.
+        trace_id      — OTel 이 만든다. 서비스 경계를 넘어 전파된다.
+      Grafana 에서 트레이스를 찾은 뒤 그 trace_id 로 로그를 조회하면
+      두 세계가 연결된다(Loki datasource 의 derivedFields 가 이 값을 파싱한다).
+    -->
     <property name="FILE_LOG_PATTERN"
-              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{correlationId:--}] [%thread] %logger{36} - %msg%n%wEx"/>
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%X{correlationId:--}] [%X{trace_id:--}] [%X{span_id:--}] [%thread] %logger{36} - %msg%n%wEx"/>
 
     <property name="CONSOLE_LOG_PATTERN_WITH_CID"
-              value="%clr(%d{HH:mm:ss.SSS}){faint} %clr(%-5level) %clr([%X{correlationId:--}]){magenta} %clr(%logger{36}){cyan} - %msg%n%wEx"/>
+              value="%clr(%d{HH:mm:ss.SSS}){faint} %clr(%-5level) %clr([%X{correlationId:--}]){magenta} %clr([%X{trace_id:--}]){blue} %clr(%logger{36}){cyan} - %msg%n%wEx"/>
 
     <!-- 롤링 정책: 하루 단위 + 파일당 100MB, 30일 보관, 전체 3GB 상한 -->
     <property name="MAX_HISTORY" value="${LOG_MAX_HISTORY:-30}"/>
