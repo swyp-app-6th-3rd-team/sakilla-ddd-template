@@ -31,3 +31,4 @@ ADR 과 역할이 다르다.
 | [sampled-sql-bind-capture.md](sampled-sql-bind-capture.md) | 샘플링된 요청만 SQL 바인드 값을 캡처하는 방법 — 손실 1건의 후속 조사 | 조사 완료, 스파이크 필요 |
 | [always-on-thread-visibility.md](always-on-thread-visibility.md) | Pinpoint 액티브 스레드 뷰 대체 — 상시 스레드 가시성과 사후 회고. 손실 1건의 후속 조사 | 조사 완료 |
 | [otel-phase0-verification.md](otel-phase0-verification.md) | OTel 에이전트가 이 스택을 실제로 계측하는가 — 백엔드 0개 실행 검증 | **통과** (2026-08-17) |
+| [otel-measurements.md](otel-measurements.md) | 도입 효과 before/after 측정 — N+1 방어 검증(30회→1회), 에이전트 오버헤드, JFR | 측정 완료 |
