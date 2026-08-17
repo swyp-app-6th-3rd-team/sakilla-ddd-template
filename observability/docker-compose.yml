@@ -35,6 +35,9 @@ services:
     depends_on:
       - tempo
       - loki
+    # 컨테이너 하나가 폭주해 호스트를 마비시키는 것을 막는다.
+    # 홈서버 사양에 맞춰 조정한다(docs/observability-deployment.md §3-3).
+    mem_limit: 512M
     networks:
       - observability-net
 
@@ -49,6 +52,9 @@ services:
     volumes:
       - ./tempo-config.yaml:/etc/tempo/tempo.yaml:ro
       - tempo_data:/var/tempo
+    # 컨테이너 하나가 폭주해 호스트를 마비시키는 것을 막는다.
+    # 홈서버 사양에 맞춰 조정한다(docs/observability-deployment.md §3-3).
+    mem_limit: 1G
     networks:
       - observability-net
 
@@ -69,6 +75,9 @@ services:
     volumes:
       - ./prometheus-config.yaml:/etc/prometheus/prometheus.yaml:ro
       - prometheus_data:/prometheus
+    # 컨테이너 하나가 폭주해 호스트를 마비시키는 것을 막는다.
+    # 홈서버 사양에 맞춰 조정한다(docs/observability-deployment.md §3-3).
+    mem_limit: 1G
     networks:
       - observability-net
 
@@ -81,6 +90,9 @@ services:
     volumes:
       - ./loki-config.yaml:/etc/loki/loki.yaml:ro
       - loki_data:/loki
+    # 컨테이너 하나가 폭주해 호스트를 마비시키는 것을 막는다.
+    # 홈서버 사양에 맞춰 조정한다(docs/observability-deployment.md §3-3).
+    mem_limit: 1G
     networks:
       - observability-net
 
@@ -101,9 +113,10 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
-      # 홈서버 단일 사용자 환경이므로 익명 열람을 허용한다.
-      # 외부 노출 시에는 이 두 줄을 지운다.
-      - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANONYMOUS:-true}
+      # 익명 열람. **기본값이 false 다** — 켜는 것은 의식적 선택이어야 한다.
+      # 로컬에서 빠르게 훑어볼 때만 .env 에서 true 로 바꾼다.
+      # 홈서버 배포 시 하드닝은 docs/observability-deployment.md §3-1 참조.
+      - GF_AUTH_ANONYMOUS_ENABLED=${GRAFANA_ANONYMOUS:-false}
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
       # trace ↔ log ↔ metric 상호 이동에 필요하다.
       - GF_FEATURE_TOGGLES_ENABLE=traceToMetrics
@@ -111,6 +124,9 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
+    # 컨테이너 하나가 폭주해 호스트를 마비시키는 것을 막는다.
+    # 홈서버 사양에 맞춰 조정한다(docs/observability-deployment.md §3-3).
+    mem_limit: 512M
     networks:
       - observability-net
 

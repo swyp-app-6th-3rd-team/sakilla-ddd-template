@@ -156,14 +156,14 @@ ArchUnit 규칙이 이를 강제한다.
 ## 테스트
 
 ```bash
-./gradlew test          # 전체 108건
+./gradlew test          # 전체 113건
 ```
 
 | 계층 | 건수 | Docker |
 |---|---|---|
-| 도메인·어댑터·서비스 단위 | 60 | 불필요 |
+| 도메인·어댑터·서비스 단위 | 56 | 불필요 |
 | 아키텍처 (ArchUnit) | 18 | 불필요 |
-| 통합 (TestContainers MySQL) | 38 | 필요 |
+| 통합 (TestContainers MySQL) | 39 | 필요 |
 
 컨테이너 재사용을 켜면 통합 테스트가 빨라진다:
 
@@ -194,11 +194,16 @@ echo "testcontainers.reuse.enable=true" >> ~/.testcontainers.properties
 docker network create observability-net
 docker compose -f observability/docker-compose.yml up -d
 
-# 2. 앱에 에이전트 부착
-docker compose -f docker-compose-prod.yml -f docker-compose-otel.yml --profile app up -d
+# 2. 앱에 에이전트 부착 (--build 를 빠뜨리지 말 것)
+docker compose -f docker-compose-prod.yml -f docker-compose-otel.yml --profile app up -d --build
 ```
 
 Grafana 는 http://localhost:3000 (datasource·대시보드가 자동 등록된다).
+기본 계정은 `.env` 의 `GRAFANA_USER`/`GRAFANA_PASSWORD` 다.
+
+> **홈서버에 배포한다면** [배포 매뉴얼](docs/observability-deployment.md) 을 먼저 읽는다.
+> 자원 산정 · 보존 기간 · 인증 하드닝 · 앱 추가 · 백업/복구 · 장애 대응이 들어 있다.
+> 특히 **기본 비밀번호와 보존 기간은 배포 전에 반드시 바꾼다.**
 
 ### 무엇을 볼 수 있나
 
@@ -251,8 +256,11 @@ logs/info/info.log       INFO 이상 전부   ← 전체 흐름 추적
 없으면 UUID 가 생성되어 응답 헤더로 돌아온다. 한 요청의 로그를 흩어진 줄들 사이에서
 다시 모을 때 쓴다.
 
+관측성을 켜면 `trace_id`·`span_id` 가 함께 찍혀 Grafana 의 트레이스와 이어진다
+(에이전트가 없으면 하이픈으로 표시된다).
+
 ```
-2026-08-15 12:22:20.247 WARN  [a3f2c1e0-...] [http-nio-8080-exec-3] c.e.s.e.GlobalExceptionHandler - ...
+2026-08-15 12:22:20.247 WARN  [a3f2c1e0-...] [76f7ba13...] [6055ebab...] [http-nio-8080-exec-3] c.e.s.e.GlobalExceptionHandler - ...
 ```
 
 ### 로그 확인
@@ -331,6 +339,7 @@ JFR 은 JDK 내장이라 ENTRYPOINT 의 `-XX:StartFlightRecording` 만 빼면 �
 | [docs/prd/](docs/prd/) | 무엇을 왜 만들었나 + 완료 판정과 검증 결과 |
 | [docs/requirement/](docs/requirement/) | 원문 요청과 해석 |
 | [docs/research/](docs/research/) | 결정 **전** 조사 기록 (실측 / 문서 / 추정 구분) |
+| [docs/observability-deployment.md](docs/observability-deployment.md) | 관측성 스택 홈서버 배포·운영 매뉴얼 |
 
 특히 볼 만한 것:
 
