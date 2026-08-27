@@ -19,4 +19,3 @@
 | [0007](0007-scalar-manual-registration.md) | Scalar 는 자동설정 대신 직접 등록한다 | Accepted |
 | [0008](0008-domain-entity-separation.md) | 도메인 객체와 JPA 엔티티를 분리한다 | Accepted |
 | [0009](0009-log-persistence.md) | 로그를 파일로 남기고 도커 볼륨에 영속화한다 | Accepted |
-| [0010](0010-observability-opentelemetry.md) | 관측성은 OpenTelemetry + Grafana 스택으로 한다 | Accepted |

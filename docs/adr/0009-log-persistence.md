@@ -79,18 +79,6 @@ USER app
 
 ## 결과
 
-**검증한 것** (실제 컨테이너로)
-
-| 항목 | 결과 |
-|---|---|
-| non-root 쓰기 권한 | ✅ `/app/logs/*` 소유자가 `app:app` |
-| 레벨 분리 | ✅ error→ERROR만, warn→WARN만, info→ERROR·WARN·INFO |
-| 볼륨 위치 | ✅ `/var/lib/docker/volumes/sakila-log/_data` |
-| **컨테이너 삭제 후 로그 보존** | ✅ `docker rm` 후에도 1,943줄 그대로 |
-| 새 컨테이너가 이어서 기록 | ✅ 1,943 → 1,985줄 (덮어쓰지 않고 누적) |
-| 이전 컨테이너 기록 유지 | ✅ 이전 종료 로그가 그대로 남음 |
-| MDC correlationId | ✅ 단위 테스트 3건 (`CorrelationIdLoggingTest`) |
-
 **포기한 것**
 - named volume 은 호스트 경로가 `/var/lib/docker/volumes/...` 라 **직접 tail 하려면
   root 권한이 필요하다.** 호스트에서 자주 들여다볼 계획이면 bind mount 가 편하다

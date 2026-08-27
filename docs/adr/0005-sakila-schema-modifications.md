@@ -52,6 +52,22 @@ Sakila 는 2006년 MySQL AB 가 만든 샘플 DB 다. 원본 스크립트를 Fly
   전문검색을 쓰려면 애플리케이션이 동기화 책임을 지거나 트리거를 직접 추가해야 한다.
   이 사실을 엔티티 주석과 시드 파일에 명시했다.
 
+## 엔티티 매핑 시 걸리는 것
+
+`ddl-auto=validate` 가 잡아내는 것들. MySQL 의 unsigned 정수 폭이 Java 타입과
+어긋나면 기동이 실패한다.
+
+| 컬럼 | 잘못된 매핑 | 올바른 매핑 |
+|---|---|---|
+| `film.length` | `Integer` — `found [smallint unsigned], but expecting [integer]` | `Short` |
+| `film.rental_duration` | `Short` — `found [tinyint unsigned], but expecting [smallint]` | `Byte` |
+
+`customer.active` · `staff.active` 는 `tinyint(1)` 이라 `Boolean` 매핑이 맞다 —
+같은 `tinyint` 라도 폭 지정에 따라 대응 타입이 갈린다.
+
+또 하나: **중첩 인터페이스로 선언한 Spring Data 리포지토리는 빈이 생성되지 않는다.**
+최상위 타입으로 분리해야 한다.
+
 ## 검토한 대안
 
 | 대안 | 기각 사유 |
