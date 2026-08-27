@@ -104,47 +104,4 @@ class CorrelationIdLoggingTest {
         // 스레드가 재사용되므로 남아 있으면 다음 요청 로그에 엉뚱한 ID 가 찍힌다.
         assertThat(MDC.get(CorrelationIdFilter.MDC_KEY)).isNull();
     }
-
-    /**
-     * correlationId 와 trace_id 가 <strong>같은 로그 이벤트에</strong> 함께 담기는지 본다.
-     *
-     * <p>이 둘이 동시에 찍혀야 두 추적 세계가 이어진다 —
-     * Grafana 에서 느린 트레이스를 찾은 뒤 그 {@code trace_id} 로 로그를 조회하고,
-     * 거기서 {@code correlationId} 를 얻어 클라이언트 문의와 대조할 수 있다.
-     * 하나라도 빠지면 연결 고리가 끊긴다.
-     *
-     * <p>운영에서는 OTel 에이전트의 logback-mdc 계측이 {@code trace_id}/{@code span_id} 를
-     * 넣는다. 여기서는 에이전트를 띄울 수 없으므로 <strong>에이전트가 하는 일을 MDC 에 직접
-     * 재현</strong>해, logback 패턴이 두 값을 함께 실어 나르는지만 검증한다.
-     * (에이전트가 실제로 MDC 를 채운다는 것은 별도로 컨테이너 로그에서 확인했다 —
-     * {@code docs/research/otel-measurements.md} 참조)
-     */
-    @Test
-    @DisplayName("correlationId 와 trace_id 가 같은 로그 이벤트에 함께 담긴다")
-    void carriesCorrelationIdAndTraceIdTogether() throws Exception {
-        String traceId = "76f7ba1344317e699207d9c5087697e8";
-        String spanId = "6055ebab63ee7194";
-
-        MockHttpServletRequest request = new MockHttpServletRequest();
-        request.addHeader(CorrelationIdFilter.HEADER, "REQ-TRACE-LINK");
-        MockHttpServletResponse response = new MockHttpServletResponse();
-
-        FilterChain chain = mock(FilterChain.class);
-        doAnswer(invocation -> {
-            // OTel 에이전트가 하는 일을 흉내 낸다.
-            MDC.put("trace_id", traceId);
-            MDC.put("span_id", spanId);
-            LoggerFactory.getLogger(LOGGER_NAME).warn("요청 처리 중 경고");
-            return null;
-        }).when(chain).doFilter(any(), any());
-
-        filter.doFilter(request, response, chain);
-
-        assertThat(appender.list).hasSize(1);
-        assertThat(appender.list.get(0).getMDCPropertyMap())
-                .as("두 ID 가 같은 이벤트에 있어야 트레이스와 로그를 이을 수 있다")
-                .containsEntry(CorrelationIdFilter.MDC_KEY, "REQ-TRACE-LINK")
-                .containsEntry("trace_id", traceId)
-                .containsEntry("span_id", spanId);
-    }
 }

@@ -16,8 +16,6 @@ import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.boot.security.autoconfigure.actuate.web.servlet.EndpointRequest;
-import org.springframework.core.annotation.Order;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
@@ -60,33 +58,7 @@ public class SecurityConfig {
     private final RestAccessDeniedHandler accessDeniedHandler;
     private final AuthProperties properties;
 
-    /**
-     * 관리 포트(management.server.port) 전용 체인.
-     *
-     * <p>포트를 분리해도 Spring Security 필터 체인은 그대로 적용된다 — 그래서
-     * Prometheus 가 {@code /actuator/prometheus} 를 긁으면 401 이 난다.
-     *
-     * <p>이 체인을 {@code @Order} 로 먼저 등록해 관리 포트 요청만 가로챈다.
-     * 서비스 포트(8080)의 보안 규칙은 아래 {@link #filterChain} 이 그대로 담당하므로
-     * {@code PUBLIC_GET} 에 메트릭 경로를 넣을 때처럼 외부에 노출되지 않는다.
-     *
-     * <p>관리 포트는 compose 네트워크 안에만 열린다(호스트 포트 매핑 없음).
-     */
     @Bean
-    @Order(1)
-    public SecurityFilterChain managementFilterChain(HttpSecurity http) throws Exception {
-        return http
-                .securityMatcher(EndpointRequest.toAnyEndpoint())
-                .csrf(csrf -> csrf.disable())
-                .httpBasic(basic -> basic.disable())
-                .formLogin(form -> form.disable())
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
-                .build();
-    }
-
-    @Bean
-    @Order(2)
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         PathPatternRequestMatcher.Builder mvc = PathPatternRequestMatcher.withDefaults();
 

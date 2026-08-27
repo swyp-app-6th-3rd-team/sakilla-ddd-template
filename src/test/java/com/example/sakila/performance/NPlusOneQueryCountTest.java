@@ -1,4 +1,4 @@
-package com.example.sakila.observability;
+package com.example.sakila.performance;
 
 import com.example.sakila.sakila.infra.PaymentEntity;
 import com.example.sakila.sakila.infra.PaymentRepository;
@@ -25,8 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>이 테스트가 존재하는 이유 — {@code application.yml} 의
  * {@code default_batch_fetch_size: 100} 은 처음부터 있었지만
- * <strong>정말 듣는지 확인한 적이 없었다.</strong> 관측성 도입의 목적 중 하나가
- * 정확히 이 검증이었으므로, 추측 대신 숫자로 남긴다.
+ * <strong>정말 듣는지 확인한 적이 없었다.</strong> 추측 대신 숫자로 남긴다.
  *
  * <p>측정 수단은 Hibernate {@code Statistics} 다. 애플리케이션 코드가 아니라
  * 테스트에서만 켜므로 운영 성능에 영향이 없다.
